@@ -3,11 +3,34 @@ var url = require('url');
 var https = require('https');
 var config = require('./config');
 var _ = require('lodash');
-var hookUrl;
 
 var baseSlackMessage = {}
 
-var postMessage = function(message, callback) {
+const baseDiscord = { 
+  "username": "AWS Cloudwatch Alarm",
+  "avatar_url": "https://i.imgur.com/4M34hi2.png",
+  "content":''
+}
+
+const randomMeme = () => {
+  const memes = [
+    'https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExNjcyYjFmOGI3NjFhODk1YjIyZTI2MWViOGE1Zjk1NGQ2YjQzOWJjZiZjdD1n/lFjHs5txoK50Y/giphy.gif', 
+    'https://media0.giphy.com/media/MZocLC5dJprPTcrm65/giphy.gif?cid=ecf05e47bdafj1l6xcwtkbhi1fyszrnf2xratxuazim188no&rid=giphy.gif&ct=g',
+    'https://media3.giphy.com/media/HUkOv6BNWc1HO/giphy.gif?cid=ecf05e470vzs0m67hndrtdos4uj73q1u69nvi95ynp4zjk2x&rid=giphy.gif&ct=g',
+    'https://media1.giphy.com/media/WpaVhEcp3Qo2TjwyI1/giphy.gif?cid=ecf05e470vzs0m67hndrtdos4uj73q1u69nvi95ynp4zjk2x&rid=giphy.gif&ct=g',
+    'https://media2.giphy.com/media/ToMjGpN38C6oDbMbQSk/giphy.gif?cid=ecf05e47vlhbu2c0qr19or52ybpgzjeoq4vm4k8haekoypvv&rid=giphy.gif&ct=g',
+    'https://media3.giphy.com/media/acy0nBlMytoaCZvoa6/giphy.gif?cid=ecf05e47fg51obdrxk6pwtzrc5srtnkx1jg2yaos1kq0qwg2&rid=giphy.gif&ct=g',
+    'https://media0.giphy.com/media/jp7jSyjNNz2ansuOS8/giphy.gif?cid=ecf05e47799shbh4kulslq1mryaatklm554w2t71mehz8cap&rid=giphy.gif&ct=g',
+    'https://media4.giphy.com/media/nrXif9YExO9EI/giphy.gif?cid=ecf05e470vzs0m67hndrtdos4uj73q1u69nvi95ynp4zjk2x&rid=giphy.gif&ct=g',
+    'https://media0.giphy.com/media/aX2P8kEFqt8u4/giphy.gif?cid=ecf05e47rghm8zkhb3toz6ydfpew2n1wyatj7srqexr9tmtg&rid=giphy.gif&ct=g',
+    'https://media4.giphy.com/media/4SXW1rU9loG1HIXXg2/giphy.gif?cid=ecf05e47aq8t2yif28yjpzw1d6pv2e7h1jcw8tg08y358uu4&rid=giphy.gif&ct=g',
+    'https://media0.giphy.com/media/cz314BBYiCkiA/giphy.gif?cid=ecf05e47bbc5qbtaiyq4jxalqhsjs38zocbz41pj468tjhnt&rid=giphy.gif&ct=g'
+  ];
+  return memes[Math.floor(Math.random()*memes.length)];
+}
+
+const postMessage = function(hookUrl, message, callback) {
+
   var body = JSON.stringify(message);
   var options = url.parse(hookUrl);
   options.method = 'POST';
@@ -227,7 +250,7 @@ var handleElasticache = function(event, context) {
   return _.merge(slackMessage, baseSlackMessage);
 };
 
-var handleCloudWatch = function(event, context) {
+var handleSlackCloudWatch = function(event, context) {
   var timestamp = (new Date(event.Records[0].Sns.Timestamp)).getTime()/1000;
   var message = JSON.parse(event.Records[0].Sns.Message);
   var region = event.Records[0].EventSubscriptionArn.split(":")[3];
@@ -273,11 +296,88 @@ var handleCloudWatch = function(event, context) {
             "short": false
           }
         ],
+        "image_url": randomMeme(),
         "ts":  timestamp
       }
     ]
   };
   return _.merge(slackMessage, baseSlackMessage);
+};
+
+var handleDiscordCloudWatch = function(event, context) {
+  var timestamp = (new Date(event.Records[0].Sns.Timestamp)).getTime()/1000;
+  var message = JSON.parse(event.Records[0].Sns.Message);
+  var region = event.Records[0].EventSubscriptionArn.split(":")[3];
+  
+  var alarmName = message.AlarmName;
+  var metricName = message.Trigger.MetricName;
+  var oldState = message.OldStateValue;
+  var newState = message.NewStateValue;
+  var alarmDescription = message.AlarmDescription;
+  var alarmReason = message.NewStateReason;
+  var trigger = message.Trigger;
+  var color = "warning";
+  const title = event.Records[0].Sns.Subject;
+  const url = "https://console.aws.amazon.com/cloudwatch/home?region=" + region + "#alarm:alarmFilter=ANY;name=" + encodeURIComponent(alarmName);
+  const description = trigger.Statistic + " "
+  + metricName + " "
+  + trigger.ComparisonOperator + " "
+  + trigger.Threshold + " for "
+  + trigger.EvaluationPeriods + " period(s) of "
+  + trigger.Period + " seconds.";
+
+  if (message.NewStateValue === "ALARM") {
+      color = "danger";
+  } else if (message.NewStateValue === "OK") {
+      color = "good";
+  }
+
+  const discordMessage = {
+    "embeds": [
+      {
+        // "author": {
+        //   "name": "Birdie♫",
+        //   "url": "https://www.reddit.com/r/cats/",
+        //   "icon_url": "https://i.imgur.com/R66g1Pe.jpg"
+        // },
+        title,
+        url,
+        description,
+        "color": 15258703,
+        "fields": [
+          {
+            "name": "Old State",
+            "value": oldState,
+            "inline": true
+          },
+          {
+            "name": "Current State",
+            "value": newState,
+            "inline": true
+          },
+          {
+            "name": "Refer to this guide to mitigate the issue.",
+            "value": "https://responsibid.atlassian.net/wiki/spaces/R3SD/pages/7045130"
+          },
+          {
+            "name": "Thanks :wink:",
+            "value": "Bot"
+          }
+        ],
+        // "thumbnail": {
+        //   "url": randomMeme()
+        // },
+        "image": {
+          "url": randomMeme(),
+        },
+        // "footer": {
+        //   "text": "Woah! So cool! :smirk:",
+        //   "icon_url": "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExNjcyYjFmOGI3NjFhODk1YjIyZTI2MWViOGE1Zjk1NGQ2YjQzOWJjZiZjdD1n/lFjHs5txoK50Y/giphy.gif"
+        // }
+      }
+    ]
+  }
+  return _.merge(discordMessage, baseDiscord);
 };
 
 var handleAutoScaling = function(event, context) {
@@ -353,13 +453,14 @@ var handleCatchAll = function(event, context) {
   return _.merge(slackMessage, baseSlackMessage);
 }
 
-var processEvent = function(event, context) {
+const processEvent = function(event, context) {
   console.log("sns received:" + JSON.stringify(event, null, 2));
-  var slackMessage = null;
-  var eventSubscriptionArn = event.Records[0].EventSubscriptionArn;
-  var eventSnsSubject = event.Records[0].Sns.Subject || 'no subject';
-  var eventSnsMessageRaw = event.Records[0].Sns.Message;
-  var eventSnsMessage = null;
+  let slackMessage = null,
+    discordMessage = null;
+  let eventSnsMessage = null;
+  const eventSubscriptionArn = event.Records[0].EventSubscriptionArn;
+  const eventSnsSubject = event.Records[0].Sns.Subject || 'no subject';
+  const eventSnsMessageRaw = event.Records[0].Sns.Message;
 
   try {
     eventSnsMessage = JSON.parse(eventSnsMessageRaw);
@@ -377,7 +478,8 @@ var processEvent = function(event, context) {
   }
   else if(eventSnsMessage && 'AlarmName' in eventSnsMessage && 'AlarmDescription' in eventSnsMessage){
     console.log("processing cloudwatch notification");
-    slackMessage = handleCloudWatch(event,context);
+    slackMessage = handleSlackCloudWatch(event,context);
+    discordMessage = handleDiscordCloudWatch(event,context);
   }
   else if(eventSubscriptionArn.indexOf(config.services.codedeploy.match_text) > -1 || eventSnsSubject.indexOf(config.services.codedeploy.match_text) > -1 || eventSnsMessageRaw.indexOf(config.services.codedeploy.match_text) > -1){
     console.log("processing codedeploy notification");
@@ -395,7 +497,7 @@ var processEvent = function(event, context) {
     slackMessage = handleCatchAll(event, context);
   }
 
-  postMessage(slackMessage, function(response) {
+  const responseCallback = function(response) {
     if (response.statusCode < 400) {
       console.info('message posted successfully');
       context.succeed();
@@ -407,29 +509,17 @@ var processEvent = function(event, context) {
       // Let Lambda retry
       context.fail("server error when processing message: " + response.statusCode + " - " + response.statusMessage);
     }
-  });
+  }
+
+  if (slackMessage && config.slackHookUrl) postMessage(config.slackHookUrl, slackMessage, responseCallback)
+  if (discordMessage && config.discordHookUrl) postMessage(config.discordHookUrl, discordMessage, responseCallback)
+  
 };
 
-exports.handler = function(event, context) {
-  if (hookUrl) {
-    processEvent(event, context);
-  } else if (config.slackHookUrl) {
-    hookUrl = config.slackHookUrl;
-    processEvent(event, context);
-  } else if (config.kmsEncryptedHookUrl && config.kmsEncryptedHookUrl !== '<kmsEncryptedHookUrl>') {
-    var encryptedBuf = new Buffer(config.kmsEncryptedHookUrl, 'base64');
-    var cipherText = { CiphertextBlob: encryptedBuf };
-    var kms = new AWS.KMS();
 
-    kms.decrypt(cipherText, function(err, data) {
-      if (err) {
-        console.log("decrypt error: " + err);
-        processEvent(event, context);
-      } else {
-        hookUrl = "https://" + data.Plaintext.toString('ascii');
-        processEvent(event, context);
-      }
-    });
+exports.handler = function(event, context) {
+  if (config.slackHookUrl || config.discordHookUrl) {
+    processEvent(event, context);
   } else {
     context.fail('hook url has not been set.');
   }
