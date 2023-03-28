@@ -355,28 +355,19 @@ var handleDiscordCloudWatch = function(event, context) {
             "value": newState,
             "inline": true
           },
-          {
-            "name": "Refer to this guide to mitigate the issue.",
-            "value": "https://responsibid.atlassian.net/wiki/spaces/R3SD/pages/7045130"
-          },
-          {
-            "name": "Thanks :wink:",
-            "value": "Bot"
-          }
         ],
-        // "thumbnail": {
-        //   "url": randomMeme()
-        // },
         "image": {
           "url": randomMeme(),
-        },
-        // "footer": {
-        //   "text": "Woah! So cool! :smirk:",
-        //   "icon_url": "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExNjcyYjFmOGI3NjFhODk1YjIyZTI2MWViOGE1Zjk1NGQ2YjQzOWJjZiZjdD1n/lFjHs5txoK50Y/giphy.gif"
-        // }
+        }
       }
     ]
   }
+  if (metricName === 'ApproximateNumberOfMessagesVisible') 
+  discordMessage.embeds[0].fields.push({
+    "name": "Refer to this guide to mitigate the issue.",
+    "value": "https://responsibid.atlassian.net/wiki/spaces/R3SD/pages/7045130"
+  });
+  
   return _.merge(discordMessage, baseDiscord);
 };
 
