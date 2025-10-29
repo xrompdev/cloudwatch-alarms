@@ -39,6 +39,75 @@ var postMessage = function(message, callback) {
   postReq.end();
 };
 
+// Post message using Slack Bot API (returns message timestamp for threading)
+var postMessageViaBot = function(channel, message, callback) {
+  const slackMessage = {
+    channel: channel,
+    text: message.text,
+    attachments: message.attachments
+  };
+
+  const body = JSON.stringify(slackMessage);
+  const options = {
+    hostname: 'slack.com',
+    path: '/api/chat.postMessage',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`,
+      'Content-Length': Buffer.byteLength(body)
+    }
+  };
+
+  const postReq = https.request(options, function(res) {
+    let chunks = [];
+    res.setEncoding('utf8');
+    res.on('data', function(chunk) {
+      return chunks.push(chunk);
+    });
+    res.on('end', function() {
+      const body = chunks.join('');
+      try {
+        const response = JSON.parse(body);
+        if (callback) {
+          callback({
+            body: body,
+            statusCode: res.statusCode,
+            statusMessage: res.statusMessage,
+            ts: response.ts,  // Message timestamp for threading
+            ok: response.ok,
+            error: response.error
+          });
+        }
+      } catch (err) {
+        if (callback) {
+          callback({
+            body: body,
+            statusCode: res.statusCode,
+            statusMessage: res.statusMessage,
+            error: err.message
+          });
+        }
+      }
+    });
+    return res;
+  });
+
+  postReq.on('error', function(err) {
+    console.error('Bot API request error:', err);
+    if (callback) {
+      callback({
+        statusCode: 0,
+        statusMessage: 'Request failed',
+        error: err.message
+      });
+    }
+  });
+
+  postReq.write(body);
+  postReq.end();
+};
+
 var handleElasticBeanstalk = function(event, context) {
   var timestamp = (new Date(event.Records[0].Sns.Timestamp)).getTime()/1000;
   var subject = event.Records[0].Sns.Subject || "AWS Elastic Beanstalk Notification";
@@ -311,6 +380,47 @@ var handleAutoScaling = function(event, context) {
   return _.merge(slackMessage, baseSlackMessage);
 };
 
+var invokeTriage = function(event, message, slackResponse, context) {
+  var region = event.Records[0].EventSubscriptionArn.split(":")[3];
+  var slackChannel = process.env.SLACK_CHANNEL || '#alerts';
+
+  // Build triage payload
+  var triagePayload = {
+    alarmName: message.AlarmName,
+    alarmDescription: message.AlarmDescription,
+    timestamp: event.Records[0].Sns.Timestamp,
+    newState: message.NewStateValue,
+    metric: {
+      name: message.Trigger.MetricName,
+      namespace: message.Trigger.Namespace,
+      threshold: message.Trigger.Threshold,
+      statistic: message.Trigger.Statistic
+    },
+    region: region,
+    slackThreadTs: slackResponse.ts || slackResponse.message?.ts,
+    slackChannel: slackChannel
+  };
+
+  console.log('Invoking triager Lambda:', process.env.TRIAGER_FUNCTION_NAME);
+
+  var lambda = new AWS.Lambda();
+  var params = {
+    FunctionName: process.env.TRIAGER_FUNCTION_NAME,
+    InvocationType: 'Event', // Async invocation
+    Payload: JSON.stringify(triagePayload)
+  };
+
+  lambda.invoke(params, function(err, data) {
+    if (err) {
+      console.error('Failed to invoke triager Lambda:', err);
+      // Don't fail the main function, just log the error
+    } else {
+      console.log('Triager Lambda invoked successfully');
+    }
+    context.succeed();
+  });
+};
+
 var handleCatchAll = function(event, context) {
 
     var record = event.Records[0]
@@ -395,10 +505,24 @@ var processEvent = function(event, context) {
     slackMessage = handleCatchAll(event, context);
   }
 
-  postMessage(slackMessage, function(response) {
+  // Use Bot API if SLACK_BOT_TOKEN is available (enables threading), otherwise use webhook
+  var postFunction = (process.env.SLACK_BOT_TOKEN && process.env.SLACK_CHANNEL)
+    ? function(msg, callback) { postMessageViaBot(process.env.SLACK_CHANNEL, msg, callback); }
+    : postMessage;
+
+  postFunction(slackMessage, function(response) {
     if (response.statusCode < 400) {
       console.info('message posted successfully');
-      context.succeed();
+      if (response.ts) {
+        console.info('message timestamp:', response.ts);
+      }
+
+      // Trigger triager Lambda for CloudWatch alarms (async)
+      if (eventSnsMessage && 'AlarmName' in eventSnsMessage && process.env.TRIAGER_FUNCTION_NAME) {
+        invokeTriage(event, eventSnsMessage, response, context);
+      } else {
+        context.succeed();
+      }
     } else if (response.statusCode < 500) {
       console.error("error posting message to slack API: " + response.statusCode + " - " + response.statusMessage);
       // Don't retry because the error is due to a problem with the request

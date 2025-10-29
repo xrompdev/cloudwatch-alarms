@@ -1,0 +1,13 @@
+{
+  "name": "slack-interactions",
+  "version": "1.0.0",
+  "description": "Handle Slack interactive button callbacks",
+  "main": "index.js",
+  "scripts": {
+    "build": "npm install --production && cd .. && ./scripts/build-slack-interactions.sh"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
