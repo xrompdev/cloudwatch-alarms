@@ -402,6 +402,36 @@ var handleAutoScaling = function(event, context) {
   return _.merge(slackMessage, baseSlackMessage);
 };
 
+var handleRIExpiry = function(event, context) {
+    var record = event.Records[0];
+    var subject = record.Sns.Subject;
+    var timestamp = new Date(record.Sns.Timestamp).getTime() / 1000;
+    var message = JSON.parse(record.Sns.Message);
+    var detail = message.Detail || '';
+
+    var color = "warning";
+    if (detail.indexOf('[CRITICAL]') > -1) {
+        color = "danger";
+    } else if (detail.indexOf('[INFO]') > -1) {
+        color = "#2eb886";
+    }
+
+    var slackMessage = {
+        text: "*" + subject + "*",
+        attachments: [
+          {
+            "color": color,
+            "fields": [
+              { "title": "Details", "value": "```\n" + detail + "\n```", "short": false }
+            ],
+            "image_url": randomMeme(),
+            "ts": timestamp
+          }
+        ]
+    };
+    return _.merge(slackMessage, baseSlackMessage);
+};
+
 var handleCatchAll = function(event, context) {
 
     var record = event.Records[0]
@@ -483,6 +513,10 @@ const processEvent = function(event, context) {
   else if(eventSubscriptionArn.indexOf(config.services.autoscaling.match_text) > -1 || eventSnsSubject.indexOf(config.services.autoscaling.match_text) > -1 || eventSnsMessageRaw.indexOf(config.services.autoscaling.match_text) > -1){
     console.log("processing autoscaling notification");
     slackMessage = handleAutoScaling(event, context);
+  }
+  else if(eventSnsMessage && eventSnsMessage.DetailType === 'RI Expiry Alert'){
+    console.log("processing ri expiry notification");
+    slackMessage = handleRIExpiry(event, context);
   }
   else{
     slackMessage = handleCatchAll(event, context);
