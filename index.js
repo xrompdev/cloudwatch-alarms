@@ -432,6 +432,144 @@ var handleRIExpiry = function(event, context) {
     return _.merge(slackMessage, baseSlackMessage);
 };
 
+var handleCostAnomaly = function(event, context) {
+    var record = event.Records[0];
+    var timestamp = new Date(record.Sns.Timestamp).getTime() / 1000;
+    var message = JSON.parse(record.Sns.Message);
+
+    var impact = message.impact || {};
+    var maxImpact = (impact.maxImpact || 0).toFixed(2);
+    var totalActual = (impact.totalActualSpend || 0).toFixed(2);
+    var totalExpected = (impact.totalExpectedSpend || 0).toFixed(2);
+    var impactPct = (impact.totalImpactPercentage || 0).toFixed(1);
+
+    var color = "warning";
+    if (parseFloat(impactPct) >= 50) {
+        color = "danger";
+    } else if (parseFloat(impactPct) < 20) {
+        color = "#2eb886";
+    }
+
+    var rootCauses = (message.rootCauses || []).map(function(rc) {
+        return rc.service + " (" + rc.region + ", " + (rc.usageType || 'N/A') + ")";
+    }).join("\n") || "N/A";
+
+    var fields = [
+        { "title": "Service", "value": message.dimensionValue || "N/A", "short": true },
+        { "title": "Account", "value": (message.rootCauses && message.rootCauses[0] && message.rootCauses[0].linkedAccount) || message.accountId || "N/A", "short": true },
+        { "title": "Impact", "value": "$" + maxImpact + " (" + impactPct + "% above expected)", "short": true },
+        { "title": "Expected Spend", "value": "$" + totalExpected, "short": true },
+        { "title": "Actual Spend", "value": "$" + totalActual, "short": true },
+        { "title": "Period", "value": (message.anomalyStartDate || "N/A") + " → " + (message.anomalyEndDate || "N/A"), "short": true },
+        { "title": "Root Causes", "value": rootCauses, "short": false }
+    ];
+
+    if (message.anomalyDetailsLink) {
+        fields.push({ "title": "Details", "value": "<" + message.anomalyDetailsLink + "|View in AWS Console>", "short": false });
+    }
+
+    var slackMessage = {
+        text: "*AWS Cost Anomaly Detected*",
+        attachments: [
+          {
+            "color": color,
+            "fields": fields,
+            "ts": timestamp
+          }
+        ]
+    };
+    return _.merge(slackMessage, baseSlackMessage);
+};
+
+var handleBillingAlarm = function(event, context) {
+    var record = event.Records[0];
+    var timestamp = new Date(record.Sns.Timestamp).getTime() / 1000;
+    var message = JSON.parse(record.Sns.Message);
+    var region = record.EventSubscriptionArn.split(":")[3];
+
+    var alarmName = message.AlarmName;
+    var newState = message.NewStateValue;
+    var oldState = message.OldStateValue;
+    var trigger = message.Trigger;
+    var threshold = trigger.Threshold;
+
+    var severityMatch = alarmName.match(/-(\w+)$/);
+    var severity = severityMatch ? severityMatch[1] : "unknown";
+
+    var color = "warning";
+    if (severity === "critical" || newState === "ALARM") {
+        color = "danger";
+    } else if (newState === "OK") {
+        color = "good";
+    } else if (severity === "info") {
+        color = "#2eb886";
+    }
+
+    var fields = [
+        { "title": "Alarm", "value": alarmName, "short": false },
+        { "title": "Threshold", "value": "$" + threshold.toLocaleString() + " USD", "short": true },
+        { "title": "Severity", "value": severity.toUpperCase(), "short": true },
+        { "title": "Old State", "value": oldState, "short": true },
+        { "title": "Current State", "value": newState, "short": true },
+        { "title": "Reason", "value": message.NewStateReason, "short": false },
+        {
+            "title": "Cost Explorer",
+            "value": "<https://us-east-1.console.aws.amazon.com/cost-management/home#/cost-explorer|View in AWS Console>",
+            "short": false
+        }
+    ];
+
+    var slackMessage = {
+        text: "*AWS Billing Alert*",
+        attachments: [
+          {
+            "color": color,
+            "fields": fields,
+            "ts": timestamp
+          }
+        ]
+    };
+    return _.merge(slackMessage, baseSlackMessage);
+};
+
+var handleDiscordBillingAlarm = function(event, context) {
+    var record = event.Records[0];
+    var message = JSON.parse(record.Sns.Message);
+
+    var alarmName = message.AlarmName;
+    var newState = message.NewStateValue;
+    var oldState = message.OldStateValue;
+    var trigger = message.Trigger;
+    var threshold = trigger.Threshold;
+
+    var severityMatch = alarmName.match(/-(\w+)$/);
+    var severity = severityMatch ? severityMatch[1] : "unknown";
+
+    var color = 16776960;
+    if (severity === "critical" || newState === "ALARM") {
+        color = 15158332;
+    } else if (newState === "OK") {
+        color = 3066993;
+    }
+
+    var discordMessage = {
+        "embeds": [
+          {
+            "title": "AWS Billing Alert",
+            "url": "https://us-east-1.console.aws.amazon.com/cost-management/home#/cost-explorer",
+            "description": "Estimated charges have reached the **$" + threshold.toLocaleString() + " USD** threshold (" + severity + ").",
+            "color": color,
+            "fields": [
+              { "name": "Old State", "value": oldState, "inline": true },
+              { "name": "Current State", "value": newState, "inline": true },
+              { "name": "Alarm", "value": alarmName, "inline": false }
+            ]
+          }
+        ]
+    };
+    return _.merge(discordMessage, baseDiscord);
+};
+
 var handleCatchAll = function(event, context) {
 
     var record = event.Records[0]
@@ -497,6 +635,11 @@ const processEvent = function(event, context) {
     console.log("processing elasticbeanstalk notification");
     slackMessage = handleElasticBeanstalk(event,context)
   }
+  else if(eventSnsMessage && 'AlarmName' in eventSnsMessage && eventSnsMessage.Trigger && eventSnsMessage.Trigger.Namespace === 'AWS/Billing'){
+    console.log("processing billing alarm notification");
+    slackMessage = handleBillingAlarm(event, context);
+    discordMessage = handleDiscordBillingAlarm(event, context);
+  }
   else if(eventSnsMessage && 'AlarmName' in eventSnsMessage && 'AlarmDescription' in eventSnsMessage){
     console.log("processing cloudwatch notification");
     slackMessage = handleSlackCloudWatch(event,context);
@@ -517,6 +660,10 @@ const processEvent = function(event, context) {
   else if(eventSnsMessage && eventSnsMessage.DetailType === 'RI Expiry Alert'){
     console.log("processing ri expiry notification");
     slackMessage = handleRIExpiry(event, context);
+  }
+  else if(eventSnsMessage && (eventSnsMessage.anomalyId || eventSnsMessage.anomalyDetailsLink || (eventSnsMessage.impact && eventSnsMessage.impact.totalImpactPercentage !== undefined))){
+    console.log("processing cost anomaly notification");
+    slackMessage = handleCostAnomaly(event, context);
   }
   else{
     slackMessage = handleCatchAll(event, context);
